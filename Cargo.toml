@@ -1,0 +1,19 @@
+[package]
+name = "onec-download-rs"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = "symbols"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.40", features = ["derive", "env"] }
+regex = "1.12.2"
+scraper = "0.24.0"
+serde = { version = "1.0.228", features = ["derive"] }
+ureq = { version = "3.3.0", default-features = false, features = ["charset", "cookies", "json", "rustls"] }
+url = "2.5.7"
