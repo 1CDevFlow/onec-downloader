@@ -7,23 +7,23 @@ fn x64_pattern() -> Regex {
 }
 
 fn rpm_pattern() -> Regex {
-    Regex::new(r".+RPM.+(ОС Linux|для Linux|Linux-систем).*").unwrap()
+    Regex::new(r".+RPM.+(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
 }
 
 fn deb_pattern() -> Regex {
-    Regex::new(r".+DEB.+(ОС Linux|для Linux|Linux-систем).*").unwrap()
+    Regex::new(r".+DEB.+(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
 }
 
 fn linux_pattern() -> Regex {
-    Regex::new(r".*(ОС Linux|для Linux|Linux-систем).*").unwrap()
+    Regex::new(r".*(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
 }
 
 fn windows_pattern() -> Regex {
-    Regex::new(r".*(ОС Windows|для Windows).*").unwrap()
+    Regex::new(r".*(ОС Windows|для Windows$|для Windows\s\+).*").unwrap()
 }
 
 fn osx_pattern() -> Regex {
-    Regex::new(r".+(OS X|для macOS).*").unwrap()
+    Regex::new(r".+(OS X|для macOS)$").unwrap()
 }
 
 fn client_pattern() -> Regex {
@@ -170,5 +170,36 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].url, "/offline");
+    }
+
+    #[test]
+    fn filters_linux_full_without_combined_client_packages() {
+        let files = vec![
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Linux + Тонкий клиент для Windows, Linux и MacOS для автоматического обновления клиентов через веб-сервер".into(),
+                url: "/with-all-clients".into(),
+            },
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Linux + Тонкий клиент для Windows и MacOS для автоматического обновления клиентов через веб-сервер".into(),
+                url: "/with-clients".into(),
+            },
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Linux".into(),
+                url: "/server-only".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Linux),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::Full),
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/server-only");
     }
 }

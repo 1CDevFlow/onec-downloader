@@ -45,6 +45,9 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     verbose: bool,
 
+    #[arg(long, default_value_t = false)]
+    trace: bool,
+
     #[arg(long, env = "ONEC_USERNAME")]
     username: String,
 
@@ -60,7 +63,7 @@ fn main() -> Result<()> {
     }
 
     let request = build_release_request(&cli)?;
-    let client = OnecClient::new(cli.username, cli.password)?.with_verbose(cli.verbose);
+    let client = OnecClient::new(cli.username, cli.password)?.with_logging(cli.verbose, cli.trace);
     let downloaded = client
         .download_release(&request, &cli.output)
         .with_context(|| format!("download failed into {}", cli.output.display()))?;
@@ -159,6 +162,7 @@ mod tests {
             offline: false,
             output: PathBuf::from("."),
             verbose: false,
+            trace: false,
             username: "user".into(),
             password: "pass".into(),
         };
@@ -180,6 +184,7 @@ mod tests {
             offline: false,
             output: PathBuf::from("."),
             verbose: false,
+            trace: false,
             username: "user".into(),
             password: "pass".into(),
         };
