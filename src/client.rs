@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use scraper::{Html, Selector};
+use terminal_size::{Width, terminal_size};
 use ureq::http::StatusCode;
 use ureq::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, HeaderMap};
 use ureq::{Agent, Body, ResponseExt, http};
@@ -127,6 +128,7 @@ impl OnecClient {
             }
         })?;
 
+        self.announce_resolved_version(project, version, &version_info.name);
         self.log(&format!(
             "matched version {}; loading release files from {}",
             version_info.name,
@@ -139,6 +141,27 @@ impl OnecClient {
             version_info.name
         ));
         Ok(version_info)
+    }
+
+    fn announce_resolved_version(&self, project: &str, requested: &str, resolved: &str) {
+        let message = if requested.eq_ignore_ascii_case("latest") || requested != resolved {
+            format!(
+                "selected version {resolved} for {project} (requested {requested})"
+            )
+        } else {
+            format!("selected version {resolved} for {project}")
+        };
+
+        if self.trace {
+            self.emit_log("trace", "catalog", &message);
+        } else if self.verbose {
+            self.emit_log("info", "catalog", &message);
+        } else if self.progress.borrow().enabled {
+            self.progress.borrow_mut().set_selected_version(message);
+            let _ = self.progress.borrow_mut().render();
+        } else {
+            eprintln!("{}", format_stage(&message));
+        }
     }
 
     pub fn project_page(&self, project: &str) -> Result<String> {
@@ -841,6 +864,7 @@ fn docker_bar(downloaded: u64, total: u64, width: usize) -> String {
 struct ProgressDisplay {
     enabled: bool,
     auth_done: bool,
+    selected_version: Option<String>,
     files: Vec<FileDisplay>,
     rendered_lines: usize,
     width: usize,
@@ -864,6 +888,7 @@ impl ProgressDisplay {
         Self {
             enabled: false,
             auth_done: false,
+            selected_version: None,
             files: Vec::new(),
             rendered_lines: 0,
             width: progress_width(),
@@ -872,6 +897,10 @@ impl ProgressDisplay {
 
     fn set_auth_done(&mut self) {
         self.auth_done = true;
+    }
+
+    fn set_selected_version(&mut self, version: String) {
+        self.selected_version = Some(version);
     }
 
     fn set_files(&mut self, files: Vec<String>) {
@@ -950,7 +979,7 @@ impl ProgressDisplay {
     }
 
     fn lines(&self) -> Vec<String> {
-        let mut lines = Vec::with_capacity(self.files.len() + 1);
+        let mut lines = Vec::with_capacity(self.files.len() + 2);
         lines.push(truncate_line(
             &format!(
                 "{} authentication {}",
@@ -963,6 +992,12 @@ impl ProgressDisplay {
             ),
             self.width,
         ));
+        if let Some(selected_version) = &self.selected_version {
+            lines.push(truncate_line(
+                &format!("{} {}", cyan("→"), selected_version),
+                self.width,
+            ));
+        }
         lines.extend(
             self.files
                 .iter()
@@ -995,11 +1030,15 @@ fn red(value: &str) -> String {
 }
 
 fn progress_width() -> usize {
+    if let Some((Width(width), _)) = terminal_size() {
+        return usize::from(width).max(60);
+    }
+
     std::env::var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value >= 60)
-        .unwrap_or(120)
+        .unwrap_or(80)
 }
 
 fn truncate_line(line: &str, width: usize) -> String {
