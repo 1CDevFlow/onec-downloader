@@ -117,27 +117,26 @@ impl OnecClient {
             .map(|item| item.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let mut version_info = versions
-            .into_iter()
-            .find(|item| item.name == version)
-            .with_context(|| {
-                if available_versions.is_empty() {
-                    format!("version {version} for {project} not found; no versions were parsed from the project page")
-                } else {
-                    format!(
-                        "version {version} for {project} not found; parsed versions include: {available_versions}"
-                    )
-                }
-            })?;
+        let mut version_info = resolve_requested_version(&versions, version).with_context(|| {
+            if available_versions.is_empty() {
+                format!("version {version} for {project} not found; no versions were parsed from the project page")
+            } else {
+                format!(
+                    "version {version} for {project} not found; parsed versions include: {available_versions}"
+                )
+            }
+        })?;
 
         self.log(&format!(
-            "matched version {version}; loading release files from {}",
+            "matched version {}; loading release files from {}",
+            version_info.name,
             version_info.url
         ));
         version_info.files = self.version_files(&version_info.url)?;
         self.log(&format!(
-            "parsed {} release files for version {version}",
-            version_info.files.len()
+            "parsed {} release files for version {}",
+            version_info.files.len(),
+            version_info.name
         ));
         Ok(version_info)
     }
@@ -1074,6 +1073,47 @@ fn scope_for_message(message: &str) -> &'static str {
     "run"
 }
 
+fn resolve_requested_version(versions: &[Version], requested: &str) -> Option<Version> {
+    if let Some(exact) = versions.iter().find(|item| item.name == requested) {
+        return Some(exact.clone());
+    }
+
+    let requested_parts = parse_version_parts(requested)?;
+    if !(2..=3).contains(&requested_parts.len()) {
+        return None;
+    }
+
+    versions
+        .iter()
+        .filter_map(|item| {
+            let parts = parse_version_parts(&item.name)?;
+            if parts.starts_with(&requested_parts) {
+                Some((parts, item))
+            } else {
+                None
+            }
+        })
+        .max_by(|(left_parts, left_item), (right_parts, right_item)| {
+            left_parts
+                .cmp(right_parts)
+                .then_with(|| left_item.name.cmp(&right_item.name))
+        })
+        .map(|(_, item)| item.clone())
+}
+
+fn parse_version_parts(version: &str) -> Option<Vec<u32>> {
+    let parts = version
+        .split('.')
+        .map(|part| part.parse::<u32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1166,6 +1206,61 @@ mod tests {
             redact_form_body(body),
             "username=<redacted>&password=<redacted>&execution=abc"
         );
+    }
+
+    #[test]
+    fn resolves_exact_requested_version() {
+        let versions = vec![
+            Version {
+                name: "8.3.27.2074".into(),
+                url: "/a".into(),
+                files: Vec::new(),
+            },
+            Version {
+                name: "8.3.27.2100".into(),
+                url: "/b".into(),
+                files: Vec::new(),
+            },
+        ];
+
+        let resolved = resolve_requested_version(&versions, "8.3.27.2074").unwrap();
+        assert_eq!(resolved.name, "8.3.27.2074");
+    }
+
+    #[test]
+    fn resolves_latest_patch_for_partial_version() {
+        let versions = vec![
+            Version {
+                name: "8.3.27.2074".into(),
+                url: "/a".into(),
+                files: Vec::new(),
+            },
+            Version {
+                name: "8.3.27.2100".into(),
+                url: "/b".into(),
+                files: Vec::new(),
+            },
+            Version {
+                name: "8.3.25.1633".into(),
+                url: "/c".into(),
+                files: Vec::new(),
+            },
+        ];
+
+        let resolved = resolve_requested_version(&versions, "8.3.27").unwrap();
+        assert_eq!(resolved.name, "8.3.27.2100");
+    }
+
+    #[test]
+    fn does_not_resolve_invalid_partial_version() {
+        let versions = vec![Version {
+            name: "8.3.27.2100".into(),
+            url: "/a".into(),
+            files: Vec::new(),
+        }];
+
+        assert!(resolve_requested_version(&versions, "8").is_none());
+        assert!(resolve_requested_version(&versions, "8.3.27.2100.1").is_none());
     }
 
     #[test]

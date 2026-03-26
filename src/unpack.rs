@@ -70,6 +70,25 @@ fn run_unpack_command(
     let status = command
         .status()
         .with_context(|| format!("failed to start extractor for {}", archive.display()))?;
+    if status.success() {
+        return Ok(());
+    }
+
+    if archive_name.ends_with(".rar")
+        && status.code() == Some(2)
+        && directory_has_files(destination)?
+    {
+        emit_stage(
+            verbose,
+            trace,
+            &format!(
+                "extractor reported warnings for {}, but files were extracted",
+                short_path(archive)
+            ),
+        );
+        return Ok(());
+    }
+
     if !status.success() {
         bail!(
             "extractor failed for {} with status {}",
@@ -79,6 +98,12 @@ fn run_unpack_command(
     }
 
     Ok(())
+}
+
+fn directory_has_files(path: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("failed to inspect extraction directory {}", path.display()))?;
+    Ok(entries.next().transpose()?.is_some())
 }
 
 fn emit_stage(verbose: bool, trace: bool, message: &str) {
@@ -185,5 +210,18 @@ mod tests {
             destination,
             PathBuf::from("/tmp/downloads/server64_8_3_27_2074")
         );
+    }
+
+    #[test]
+    fn detects_non_empty_directory() {
+        let base = std::env::temp_dir().join(format!("onec-download-rs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        assert!(!directory_has_files(&base).unwrap());
+
+        fs::write(base.join("file.txt"), "ok").unwrap();
+        assert!(directory_has_files(&base).unwrap());
+
+        let _ = fs::remove_dir_all(&base);
     }
 }

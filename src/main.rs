@@ -159,6 +159,8 @@ fn detect_os() -> Option<OsName> {
 }
 
 fn normalize_release_request(mut request: ReleaseDescription) -> ReleaseDescription {
+    request.project = normalize_project_alias(&request.project, &request.version);
+
     if request.project == "Platform83"
         && request.filter.os_name == Some(OsName::Linux)
         && request.filter.package_type == Some(DistributiveType::Client)
@@ -178,10 +180,27 @@ fn normalize_release_request(mut request: ReleaseDescription) -> ReleaseDescript
     request
 }
 
+fn normalize_project_alias(project: &str, version: &str) -> String {
+    if project != "Platform" {
+        return project.to_owned();
+    }
+
+    match parse_version_prefix(version) {
+        Some([8, minor]) => format!("Platform8{minor}"),
+        _ => project.to_owned(),
+    }
+}
+
 fn is_legacy_linux_platform_version(version: &str) -> bool {
     parse_version_key(version)
         .map(|version_key| version_key < [8, 3, 20, 0])
         .unwrap_or(false)
+}
+
+fn parse_version_prefix(version: &str) -> Option<[u32; 2]> {
+    let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
+    let parsed = [parts.next()??, parts.next()??];
+    Some(parsed)
 }
 
 fn parse_version_key(version: &str) -> Option<[u32; 4]> {
@@ -338,5 +357,101 @@ mod tests {
         let request = build_release_request(&cli).unwrap();
         assert_eq!(request.filter.os_name, Some(OsName::Linux));
         assert_eq!(request.filter.package_type, Some(DistributiveType::ThinClient));
+    }
+
+    #[test]
+    fn rewrites_platform_alias_for_83_branch() {
+        let cli = Cli {
+            spec: Some("Platform@8.3.27".into()),
+            project: None,
+            version: None,
+            os: None,
+            arch: None,
+            package_type: None,
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.project, "Platform83");
+        assert_eq!(request.version, "8.3.27");
+    }
+
+    #[test]
+    fn rewrites_platform_alias_for_85_branch() {
+        let cli = Cli {
+            spec: Some("Platform@8.5.1".into()),
+            project: None,
+            version: None,
+            os: None,
+            arch: None,
+            package_type: None,
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.project, "Platform85");
+        assert_eq!(request.version, "8.5.1");
+    }
+
+    #[test]
+    fn rewrites_platform_alias_for_80_branch() {
+        let cli = Cli {
+            spec: Some("Platform@8.0.1".into()),
+            project: None,
+            version: None,
+            os: None,
+            arch: None,
+            package_type: None,
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.project, "Platform80");
+        assert_eq!(request.version, "8.0.1");
+    }
+
+    #[test]
+    fn rewrites_platform_alias_for_81_branch() {
+        let cli = Cli {
+            spec: Some("Platform@8.1.2".into()),
+            project: None,
+            version: None,
+            os: None,
+            arch: None,
+            package_type: None,
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.project, "Platform81");
+        assert_eq!(request.version, "8.1.2");
     }
 }
