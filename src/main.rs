@@ -6,6 +6,7 @@ use onec_download_rs::OnecClient;
 use onec_download_rs::model::{
     ArchitectureName, ArtifactFilter, DistributiveType, OsName, ReleaseDescription,
 };
+use onec_download_rs::unpack::unpack_archives;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,15 +44,21 @@ struct Cli {
     output: PathBuf,
 
     #[arg(long, default_value_t = false)]
+    extract: bool,
+
+    #[arg(long, default_value_t = false, help = "Print matched release files and exit")]
+    print_files: bool,
+
+    #[arg(long, default_value_t = false)]
     verbose: bool,
 
     #[arg(long, default_value_t = false)]
     trace: bool,
 
-    #[arg(long, env = "ONEC_USERNAME")]
+    #[arg(long, env = "ONEC_USERNAME", hide_env_values = true)]
     username: String,
 
-    #[arg(long, env = "ONEC_PASSWORD")]
+    #[arg(long, env = "ONEC_PASSWORD", hide_env_values = true)]
     password: String,
 }
 
@@ -63,13 +70,32 @@ fn main() -> Result<()> {
     }
 
     let request = build_release_request(&cli)?;
-    let client = OnecClient::new(cli.username, cli.password)?.with_logging(cli.verbose, cli.trace);
+    let client = OnecClient::new(cli.username, cli.password)?
+        .with_logging(cli.verbose, cli.trace)
+        .with_quiet(cli.print_files);
+
+    if cli.print_files {
+        let files = client.matching_release_files(&request)?;
+        for file in files {
+            println!("{}\t{}", file.name, file.url);
+        }
+        return Ok(());
+    }
+
     let downloaded = client
         .download_release(&request, &cli.output)
         .with_context(|| format!("download failed into {}", cli.output.display()))?;
 
-    for path in downloaded {
-        println!("{}", path.display());
+    let results = if cli.extract {
+        unpack_archives(&downloaded, cli.verbose, cli.trace)?
+    } else {
+        downloaded
+    };
+
+    if cli.verbose || cli.trace {
+        for path in results {
+            println!("{}", path.display());
+        }
     }
 
     Ok(())
@@ -88,7 +114,7 @@ fn build_release_request(cli: &Cli) -> Result<ReleaseDescription> {
         .or(spec_version)
         .context("version must be provided via PROJECT@VERSION or --version")?;
 
-    Ok(ReleaseDescription {
+    Ok(normalize_release_request(ReleaseDescription {
         project,
         version,
         filter: ArtifactFilter {
@@ -97,7 +123,7 @@ fn build_release_request(cli: &Cli) -> Result<ReleaseDescription> {
             package_type: cli.package_type,
             offline: cli.offline,
         },
-    })
+    }))
 }
 
 fn parse_spec(spec: Option<&str>) -> Result<(Option<String>, Option<String>)> {
@@ -132,6 +158,48 @@ fn detect_os() -> Option<OsName> {
     }
 }
 
+fn normalize_release_request(mut request: ReleaseDescription) -> ReleaseDescription {
+    if request.project == "Platform83"
+        && request.filter.os_name == Some(OsName::Linux)
+        && request.filter.package_type == Some(DistributiveType::Client)
+    {
+        request.filter.package_type = Some(DistributiveType::ThinClient);
+    }
+
+    if request.project == "Platform83"
+        && request.filter.os_name == Some(OsName::Linux)
+        && request.filter.package_type == Some(DistributiveType::Full)
+        && is_legacy_linux_platform_version(&request.version)
+    {
+        request.filter.os_name = Some(OsName::Deb);
+        request.filter.package_type = Some(DistributiveType::ClientOrServer);
+    }
+
+    request
+}
+
+fn is_legacy_linux_platform_version(version: &str) -> bool {
+    parse_version_key(version)
+        .map(|version_key| version_key < [8, 3, 20, 0])
+        .unwrap_or(false)
+}
+
+fn parse_version_key(version: &str) -> Option<[u32; 4]> {
+    let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
+    let parsed = [
+        parts.next()??,
+        parts.next()??,
+        parts.next()??,
+        parts.next()??,
+    ];
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +229,8 @@ mod tests {
             package_type: Some(DistributiveType::Full),
             offline: false,
             output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
             verbose: false,
             trace: false,
             username: "user".into(),
@@ -183,6 +253,8 @@ mod tests {
             package_type: None,
             offline: false,
             output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
             verbose: false,
             trace: false,
             username: "user".into(),
@@ -191,5 +263,80 @@ mod tests {
 
         let request = build_release_request(&cli).unwrap();
         assert_eq!(request.filter.architecture, Some(ArchitectureName::X64));
+    }
+
+    #[test]
+    fn rewrites_legacy_linux_full_to_deb_client_or_server() {
+        let cli = Cli {
+            spec: Some("Platform83@8.3.19.1770".into()),
+            project: None,
+            version: None,
+            os: Some(OsName::Linux),
+            arch: Some(ArchitectureName::X64),
+            package_type: Some(DistributiveType::Full),
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.filter.os_name, Some(OsName::Deb));
+        assert_eq!(
+            request.filter.package_type,
+            Some(DistributiveType::ClientOrServer)
+        );
+    }
+
+    #[test]
+    fn keeps_new_linux_full_as_is() {
+        let cli = Cli {
+            spec: Some("Platform83@8.3.20.1000".into()),
+            project: None,
+            version: None,
+            os: Some(OsName::Linux),
+            arch: Some(ArchitectureName::X64),
+            package_type: Some(DistributiveType::Full),
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.filter.os_name, Some(OsName::Linux));
+        assert_eq!(request.filter.package_type, Some(DistributiveType::Full));
+    }
+
+    #[test]
+    fn rewrites_platform83_linux_client_to_thin_client() {
+        let cli = Cli {
+            spec: Some("Platform83@8.3.27.2074".into()),
+            project: None,
+            version: None,
+            os: Some(OsName::Linux),
+            arch: Some(ArchitectureName::X64),
+            package_type: Some(DistributiveType::Client),
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.filter.os_name, Some(OsName::Linux));
+        assert_eq!(request.filter.package_type, Some(DistributiveType::ThinClient));
     }
 }

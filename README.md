@@ -10,6 +10,8 @@ Rust CLI/library for downloading release artifacts from `releases.1c.ru`.
 - Artifact filtering by OS, architecture, distributive type, and offline flag
 - Auto-detection of current OS and default architecture `x64`
 - File download with output to a target directory
+- Print matched release files without downloading via `--print-files`
+- Optional archive extraction via `--extract`
 
 ## Usage
 
@@ -31,9 +33,12 @@ cargo run -- Platform83@8.3.25.1286 \
 
 In this form `--os` is auto-detected from the current environment, and `--arch` defaults to `x64`.
 If you pass `--os` or `--arch` explicitly, those values are used as-is.
+For legacy `Platform83` Linux releases before `8.3.20`, `linux + full` is normalized to `deb + client-or-server`, because those versions ship separate client/server packages instead of a single full installer.
 By default, the CLI prints concise stage and download progress messages to `stderr`.
 If you pass `--verbose`, the CLI prints compact progress logs to `stderr`.
 If you pass `--trace`, the CLI prints full HTTP/auth diagnostics to `stderr`.
+If you pass `--print-files`, the CLI prints matched release file names and URLs to `stdout` without downloading anything.
+If you pass `--extract`, each downloaded archive is unpacked into its own sibling directory.
 
 Offline EDT release:
 
@@ -59,6 +64,23 @@ Full diagnostic trace:
 ```bash
 cargo run -- Platform83@8.3.25.1286 \
   --trace \
+  --type full \
+  --output ./downloads
+```
+
+Print matched files only:
+
+```bash
+cargo run -- Platform83@8.3.27.2074 \
+  --type full \
+  --print-files
+```
+
+Download and unpack archives:
+
+```bash
+cargo run -- Platform83@8.3.25.1286 \
+  --extract \
   --type full \
   --output ./downloads
 ```

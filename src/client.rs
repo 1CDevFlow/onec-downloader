@@ -11,7 +11,7 @@ use ureq::{Agent, Body, ResponseExt, http};
 use url::Url;
 
 use crate::filter::filter_files;
-use crate::model::{ArtifactFilter, ReleaseDescription, Version};
+use crate::model::{ArtifactFilter, ReleaseDescription, ReleaseFile, Version};
 use crate::parse;
 
 const RELEASES_URL: &str = "https://releases.1c.ru";
@@ -24,6 +24,7 @@ pub struct OnecClient {
     http: Agent,
     verbose: bool,
     trace: bool,
+    quiet: bool,
     progress: RefCell<ProgressDisplay>,
 }
 
@@ -47,6 +48,7 @@ impl OnecClient {
             http,
             verbose: false,
             trace: false,
+            quiet: false,
             progress: RefCell::new(ProgressDisplay::new()),
         })
     }
@@ -55,6 +57,14 @@ impl OnecClient {
         self.verbose = verbose;
         self.trace = trace;
         self.progress.get_mut().enabled = !verbose && !trace && std::io::stderr().is_terminal();
+        self
+    }
+
+    pub fn with_quiet(mut self, quiet: bool) -> Self {
+        self.quiet = quiet;
+        if quiet {
+            self.progress.get_mut().enabled = false;
+        }
         self
     }
 
@@ -81,6 +91,19 @@ impl OnecClient {
         self.auth()?;
         let version = self.version_info(&release.project, &release.version)?;
         self.download_matching_files(&version, &release.filter, destination)
+    }
+
+    pub fn matching_release_files(
+        &self,
+        release: &ReleaseDescription,
+    ) -> Result<Vec<ReleaseFile>> {
+        self.log(&format!(
+            "starting candidate selection: project={}, version={}",
+            release.project, release.version
+        ));
+        self.auth()?;
+        let version = self.version_info(&release.project, &release.version)?;
+        self.matching_files_for_version(&version, &release.filter)
     }
 
     pub fn version_info(&self, project: &str, version: &str) -> Result<Version> {
@@ -134,15 +157,7 @@ impl OnecClient {
         artifact_filter: &ArtifactFilter,
         destination: impl AsRef<Path>,
     ) -> Result<Vec<PathBuf>> {
-        let files = filter_files(&version.files, artifact_filter);
-        self.log(&format!(
-            "filtered {} matching files out of {}",
-            files.len(),
-            version.files.len()
-        ));
-        if files.is_empty() {
-            bail!("no files found for filter {:?}", artifact_filter);
-        }
+        let files = self.matching_files_for_version(version, artifact_filter)?;
         self.progress
             .borrow_mut()
             .set_files(files.iter().map(|file| file.name.clone()).collect());
@@ -177,6 +192,39 @@ impl OnecClient {
         }
 
         Ok(downloaded)
+    }
+
+    fn matching_files_for_version(
+        &self,
+        version: &Version,
+        artifact_filter: &ArtifactFilter,
+    ) -> Result<Vec<ReleaseFile>> {
+        let files = filter_files(&version.files, artifact_filter);
+        self.log(&format!(
+            "filtered {} matching files out of {}",
+            files.len(),
+            version.files.len()
+        ));
+        if files.is_empty() {
+            let available_files = version
+                .files
+                .iter()
+                .take(10)
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            if available_files.is_empty() {
+                bail!("no files found for filter {:?}; version contains no files", artifact_filter);
+            }
+
+            bail!(
+                "no files found for filter {:?}; available files include: {}",
+                artifact_filter,
+                available_files
+            );
+        }
+
+        Ok(files)
     }
 
     pub fn get_text(&self, url: &str) -> Result<String> {
@@ -388,21 +436,30 @@ impl OnecClient {
     }
 
     fn stage(&self, message: &str) {
+        if self.quiet {
+            return;
+        }
         if !self.verbose && !self.trace {
             let progress = self.progress.borrow_mut();
             if !progress.enabled {
-                eprintln!("[onec-download-rs] {}", format_stage(message));
+                eprintln!("{}", format_stage(message));
             }
         }
     }
 
     fn log(&self, message: &str) {
+        if self.quiet {
+            return;
+        }
         if self.verbose {
             self.emit_log("info", scope_for_message(message), message);
         }
     }
 
     fn trace(&self, message: &str) {
+        if self.quiet {
+            return;
+        }
         if self.trace {
             self.emit_log("trace", scope_for_message(message), message);
         }
@@ -413,6 +470,9 @@ impl OnecClient {
     }
 
     fn file_progress(&self, path: &Path, downloaded: u64, total: Option<u64>) {
+        if self.quiet {
+            return;
+        }
         let message = match total {
             Some(total) if total > 0 => format!(
                 "{} {} {:>3}%  {}/{}",
@@ -435,7 +495,7 @@ impl OnecClient {
         } else {
             let progress = self.progress.borrow();
             if !progress.enabled {
-                eprintln!("[onec-download-rs] {}", format_progress(&message));
+                eprintln!("{}", format_progress(&message));
             }
         }
     }
@@ -1017,7 +1077,16 @@ fn scope_for_message(message: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{ArchitectureName, ArtifactFilter, DistributiveType, OsName};
     use ureq::http::HeaderValue;
+
+    fn is_legacy_linux_platform_version(version: &str) -> bool {
+        let mut parts = version.split('.').filter_map(|part| part.parse::<u32>().ok());
+        matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some(8), Some(3), Some(patch)) if patch < 20
+        )
+    }
 
     #[test]
     fn extracts_filename() {
@@ -1096,6 +1165,140 @@ mod tests {
         assert_eq!(
             redact_form_body(body),
             "username=<redacted>&password=<redacted>&execution=abc"
+        );
+    }
+
+    #[test]
+    #[ignore = "live network test; requires ONEC_USERNAME and ONEC_PASSWORD"]
+    fn live_platform83_full_filter_returns_single_match_for_sample_versions() {
+        let username = std::env::var("ONEC_USERNAME")
+            .expect("ONEC_USERNAME must be set for live tests");
+        let password = std::env::var("ONEC_PASSWORD")
+            .expect("ONEC_PASSWORD must be set for live tests");
+
+        let client = OnecClient::new(username, password)
+            .unwrap()
+            .with_quiet(true);
+
+        client.auth().unwrap();
+
+        let page = client.project_page("Platform83").unwrap();
+        let versions = parse::versions(&page);
+        assert!(
+            versions.len() >= 5,
+            "expected Platform83 project page to contain at least 5 versions"
+        );
+
+        let sample_indexes = [
+            0,
+            versions.len() / 4,
+            versions.len() / 2,
+            (versions.len() * 3) / 4,
+            versions.len() - 1,
+        ];
+        let mut sampled_versions = Vec::new();
+        for index in sample_indexes {
+            let version = versions[index].name.clone();
+            if !sampled_versions.contains(&version) {
+                sampled_versions.push(version);
+            }
+        }
+
+        let mut failed_versions = Vec::new();
+
+        for version in &sampled_versions {
+            let version_info = client.version_info("Platform83", version).unwrap();
+
+            let linux_filter = if is_legacy_linux_platform_version(version) {
+                ArtifactFilter {
+                    os_name: Some(OsName::Deb),
+                    architecture: Some(ArchitectureName::X64),
+                    package_type: Some(DistributiveType::ClientOrServer),
+                    offline: false,
+                }
+            } else {
+                ArtifactFilter {
+                    os_name: Some(OsName::Linux),
+                    architecture: Some(ArchitectureName::X64),
+                    package_type: Some(DistributiveType::Full),
+                    offline: false,
+                }
+            };
+
+            let expected_linux_matches = if is_legacy_linux_platform_version(version) {
+                2
+            } else {
+                1
+            };
+
+            match client.matching_files_for_version(&version_info, &linux_filter) {
+                Ok(files) if files.len() == expected_linux_matches => {}
+                Ok(files) => failed_versions.push(format!(
+                    "Linux {version}: expected exactly {expected_linux_matches} file(s), got {} ({})",
+                    files.len(),
+                    files
+                        .iter()
+                        .map(|file| file.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
+                Err(error) => failed_versions.push(format!("Linux {version}: {error:#}")),
+            }
+
+            let windows_x64_filter = ArtifactFilter {
+                os_name: Some(OsName::Win),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::Full),
+                offline: false,
+            };
+
+            match client.matching_files_for_version(&version_info, &windows_x64_filter) {
+                Ok(files) if files.len() == 1 => {}
+                Ok(files) => failed_versions.push(format!(
+                    "Win x64 {version}: expected exactly 1 file, got {} ({})",
+                    files.len(),
+                    files
+                        .iter()
+                        .map(|file| file.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
+                Err(_) => {
+                    let windows_x86_filter = ArtifactFilter {
+                        os_name: Some(OsName::Win),
+                        architecture: Some(ArchitectureName::X86),
+                        package_type: Some(DistributiveType::Full),
+                        offline: false,
+                    };
+                    match client.matching_files_for_version(&version_info, &windows_x86_filter) {
+                        Ok(files) if files.len() == 1 => {}
+                        Ok(files) => failed_versions.push(format!(
+                            "Win x86 {version}: expected exactly 1 file, got {} ({})",
+                            files.len(),
+                            files
+                                .iter()
+                                .map(|file| file.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        )),
+                        Err(error) => {
+                            failed_versions.push(format!("Win {version}: {error:#}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            failed_versions.is_empty(),
+            "full filter did not return a single file for {} sampled version(s): {}",
+            failed_versions.len(),
+            failed_versions
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ")
         );
     }
 }

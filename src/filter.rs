@@ -42,6 +42,10 @@ fn full_pattern() -> Regex {
     Regex::new(r"^Технологическая платформа.+").unwrap()
 }
 
+fn combined_client_package_pattern() -> Regex {
+    Regex::new(r".+\+\s*Тонкий клиент.+").unwrap()
+}
+
 fn offline_pattern() -> Regex {
     Regex::new(r".+(без интернета|оффлайн).*").unwrap()
 }
@@ -71,7 +75,11 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
         let matched = match os_name {
             OsName::Win => windows_pattern().is_match(name),
             OsName::Mac => osx_pattern().is_match(name),
-            OsName::Linux => linux_pattern().is_match(name),
+            OsName::Linux => {
+                linux_pattern().is_match(name)
+                    && !deb_pattern().is_match(name)
+                    && !rpm_pattern().is_match(name)
+            }
             OsName::Deb => deb_pattern().is_match(name),
             OsName::Rpm => rpm_pattern().is_match(name),
         };
@@ -98,6 +106,13 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
             DistributiveType::ClientOrServer => client_or_server_pattern().is_match(name),
         };
         if !matched {
+            return false;
+        }
+
+        if package_type == DistributiveType::Full
+            && artifact_filter.os_name == Some(OsName::Win)
+            && combined_client_package_pattern().is_match(name)
+        {
             return false;
         }
     }
@@ -143,6 +158,75 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].url, "/good");
+    }
+
+    #[test]
+    fn filters_windows_x86_and_x64_differently() {
+        let files = vec![
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Windows".into(),
+                url: "/x64".into(),
+            },
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия для Windows".into(),
+                url: "/x86".into(),
+            },
+        ];
+
+        let x86_result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Win),
+                architecture: Some(ArchitectureName::X86),
+                package_type: Some(DistributiveType::Full),
+                offline: false,
+            },
+        );
+        let x64_result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Win),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::Full),
+                offline: false,
+            },
+        );
+
+        assert_eq!(x86_result.len(), 1);
+        assert_eq!(x86_result[0].url, "/x86");
+        assert_eq!(x64_result.len(), 1);
+        assert_eq!(x64_result[0].url, "/x64");
+    }
+
+    #[test]
+    fn filters_windows_full_without_combined_client_packages() {
+        let files = vec![
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Windows + Тонкий клиент для Windows, Linux и MacOS для автоматического обновления клиентов через веб-сервер".into(),
+                url: "/with-all-clients".into(),
+            },
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Windows + Тонкий клиент для Windows и MacOS для автоматического обновления клиентов через веб-сервер".into(),
+                url: "/with-clients".into(),
+            },
+            ReleaseFile {
+                name: "Технологическая платформа 1С:Предприятия (64-bit) для Windows".into(),
+                url: "/windows-only".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Win),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::Full),
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/windows-only");
     }
 
     #[test]
@@ -201,5 +285,68 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].url, "/server-only");
+    }
+
+    #[test]
+    fn filters_legacy_linux_client_or_server_as_two_packages() {
+        let files = vec![
+            ReleaseFile {
+                name: "Клиент 1С:Предприятия (64-bit) для DEB-based Linux-систем".into(),
+                url: "/client".into(),
+            },
+            ReleaseFile {
+                name: "Сервер 1С:Предприятия (64-bit) для DEB-based Linux-систем".into(),
+                url: "/server".into(),
+            },
+            ReleaseFile {
+                name: "Тонкий клиент 1С:Предприятия (64-bit) для DEB-based Linux-систем".into(),
+                url: "/thin".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Deb),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::ClientOrServer),
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].url, "/client");
+        assert_eq!(result[1].url, "/server");
+    }
+
+    #[test]
+    fn filters_generic_linux_thin_client_without_deb_or_rpm_variants() {
+        let files = vec![
+            ReleaseFile {
+                name: "Тонкий клиент 1С:Предприятия (64-bit) для DEB-based Linux-систем".into(),
+                url: "/deb".into(),
+            },
+            ReleaseFile {
+                name: "Тонкий клиент 1С:Предприятия (64-bit) для Linux".into(),
+                url: "/generic".into(),
+            },
+            ReleaseFile {
+                name: "Тонкий клиент 1С:Предприятия (64-bit) для RPM-based Linux-систем".into(),
+                url: "/rpm".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Linux),
+                architecture: Some(ArchitectureName::X64),
+                package_type: Some(DistributiveType::ThinClient),
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/generic");
     }
 }
