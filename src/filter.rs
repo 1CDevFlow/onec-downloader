@@ -3,7 +3,11 @@ use regex::Regex;
 use crate::model::{ArchitectureName, ArtifactFilter, DistributiveType, OsName, ReleaseFile};
 
 fn x64_pattern() -> Regex {
-    Regex::new(r".*(\(64-bit\)|\(64 бит\)).*").unwrap()
+    Regex::new(r".*(\(64-bit\)|\(64 бит\)|\b64\s*Bit\b).*").unwrap()
+}
+
+fn x86_pattern() -> Regex {
+    Regex::new(r".*(\(32-bit\)|\(32 бит\)|\b32\s*Bit\b).*").unwrap()
 }
 
 fn rpm_pattern() -> Regex {
@@ -15,7 +19,7 @@ fn deb_pattern() -> Regex {
 }
 
 fn linux_pattern() -> Regex {
-    Regex::new(r".*(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
+    Regex::new(r".*(ОС Linux|для Linux($|\s+(без интернета|оффлайн)|\s+\d+\s*Bit|\s+\(\d+-bit\))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
 }
 
 fn windows_pattern() -> Regex {
@@ -90,9 +94,16 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
 
     if let Some(architecture) = artifact_filter.architecture {
         let is_x64 = x64_pattern().is_match(name);
+        let is_x86 = x86_pattern().is_match(name);
         match architecture {
             ArchitectureName::X86 if is_x64 => return false,
-            ArchitectureName::X64 if !is_x64 => return false,
+            ArchitectureName::X64 if is_x86 => return false,
+            ArchitectureName::X64
+                if !is_x64
+                    && artifact_filter.package_type.is_some() =>
+            {
+                return false;
+            }
             _ => {}
         }
     }
@@ -196,6 +207,60 @@ mod tests {
         assert_eq!(x86_result[0].url, "/x86");
         assert_eq!(x64_result.len(), 1);
         assert_eq!(x64_result[0].url, "/x64");
+    }
+
+    #[test]
+    fn filters_x64_files_with_bit_suffix() {
+        let files = vec![
+            ReleaseFile {
+                name: "1C:Enterprise Development Tools для Linux 64 Bit".into(),
+                url: "/x64".into(),
+            },
+            ReleaseFile {
+                name: "1C:Enterprise Development Tools для Linux 32 Bit".into(),
+                url: "/x86".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Linux),
+                architecture: Some(ArchitectureName::X64),
+                package_type: None,
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/x64");
+    }
+
+    #[test]
+    fn allows_generic_x64_when_package_type_is_unspecified() {
+        let files = vec![
+            ReleaseFile {
+                name: "Дистрибутив 1C:EDT для ОС Linux".into(),
+                url: "/generic-linux".into(),
+            },
+            ReleaseFile {
+                name: "Дистрибутив 1C:EDT для ОС Windows 32 Bit".into(),
+                url: "/windows-x86".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Linux),
+                architecture: Some(ArchitectureName::X64),
+                package_type: None,
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/generic-linux");
     }
 
     #[test]
@@ -348,5 +413,32 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].url, "/generic");
+    }
+
+    #[test]
+    fn filters_generic_linux_files_with_bit_suffix() {
+        let files = vec![
+            ReleaseFile {
+                name: "1C:Enterprise Development Tools для Linux 64 Bit".into(),
+                url: "/linux".into(),
+            },
+            ReleaseFile {
+                name: "1C:Enterprise Development Tools для Windows 64 Bit".into(),
+                url: "/windows".into(),
+            },
+        ];
+
+        let result = filter_files(
+            &files,
+            &ArtifactFilter {
+                os_name: Some(OsName::Linux),
+                architecture: None,
+                package_type: None,
+                offline: false,
+            },
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].url, "/linux");
     }
 }

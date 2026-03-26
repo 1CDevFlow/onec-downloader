@@ -1074,6 +1074,18 @@ fn scope_for_message(message: &str) -> &'static str {
 }
 
 fn resolve_requested_version(versions: &[Version], requested: &str) -> Option<Version> {
+    if requested.eq_ignore_ascii_case("latest") {
+        return versions
+            .iter()
+            .filter_map(|item| Some((parse_version_parts(&item.name)?, item)))
+            .max_by(|(left_parts, left_item), (right_parts, right_item)| {
+                left_parts
+                    .cmp(right_parts)
+                    .then_with(|| left_item.name.cmp(&right_item.name))
+            })
+            .map(|(_, item)| item.clone());
+    }
+
     if let Some(exact) = versions.iter().find(|item| item.name == requested) {
         return Some(exact.clone());
     }
@@ -1261,6 +1273,25 @@ mod tests {
 
         assert!(resolve_requested_version(&versions, "8").is_none());
         assert!(resolve_requested_version(&versions, "8.3.27.2100.1").is_none());
+    }
+
+    #[test]
+    fn resolves_latest_keyword_to_latest_version() {
+        let versions = vec![
+            Version {
+                name: "2024.1.1".into(),
+                url: "/a".into(),
+                files: Vec::new(),
+            },
+            Version {
+                name: "2025.2.3".into(),
+                url: "/b".into(),
+                files: Vec::new(),
+            },
+        ];
+
+        let resolved = resolve_requested_version(&versions, "latest").unwrap();
+        assert_eq!(resolved.name, "2025.2.3");
     }
 
     #[test]

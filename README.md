@@ -31,6 +31,13 @@ cargo run -- Platform83@8.3.25.1286 \
   --output ./downloads
 ```
 
+Latest release shorthand:
+
+```bash
+cargo run -- DevelopmentTools10 --print-files
+cargo run -- DevelopmentTools10@latest --print-files
+```
+
 In this form `--os` is auto-detected from the current environment, and `--arch` defaults to `x64`.
 If you pass `--os` or `--arch` explicitly, those values are used as-is.
 For legacy `Platform83` Linux releases before `8.3.20`, `linux + full` is normalized to `deb + client-or-server`, because those versions ship separate client/server packages instead of a single full installer.

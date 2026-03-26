@@ -77,7 +77,7 @@ fn version_from_link(element: &ElementRef<'_>) -> Option<Version> {
 }
 
 fn extract_version(value: &str) -> Option<String> {
-    let regex = Regex::new(r"\b\d+\.\d+\.\d+\.\d+\b").unwrap();
+    let regex = Regex::new(r"\b\d+\.\d+(?:\.\d+(?:\.\d+)?)?\b").unwrap();
     regex.find(value).map(|m| m.as_str().to_owned())
 }
 
@@ -124,6 +124,33 @@ mod tests {
             <div>
                 <a href="/project/Platform83/version/8.3.27.2074">Скачать 8.3.27.2074</a>
             </div>
+        "#;
+
+        let versions = versions(html);
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].name, "8.3.27.2074");
+    }
+
+    #[test]
+    fn parses_two_part_versions() {
+        let html = r#"
+            <table>
+                <tr><td class="versionColumn"><a href="/v1">2020.1</a></td></tr>
+            </table>
+        "#;
+
+        let versions = versions(html);
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].name, "2020.1");
+        assert_eq!(versions[0].url, "/v1");
+    }
+
+    #[test]
+    fn prefers_full_version_over_prefix_match() {
+        let html = r#"
+            <table>
+                <tr><td class="versionColumn"><a href="/v1">8.3.27.2074</a></td></tr>
+            </table>
         "#;
 
         let versions = versions(html);

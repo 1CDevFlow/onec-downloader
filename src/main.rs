@@ -112,7 +112,7 @@ fn build_release_request(cli: &Cli) -> Result<ReleaseDescription> {
         .version
         .clone()
         .or(spec_version)
-        .context("version must be provided via PROJECT@VERSION or --version")?;
+        .unwrap_or_else(|| "latest".to_owned());
 
     Ok(normalize_release_request(ReleaseDescription {
         project,
@@ -235,6 +235,30 @@ mod tests {
         let (project, version) = parse_spec(Some("Platform83")).unwrap();
         assert_eq!(project.as_deref(), Some("Platform83"));
         assert_eq!(version, None);
+    }
+
+    #[test]
+    fn defaults_missing_version_to_latest() {
+        let cli = Cli {
+            spec: Some("DevelopmentTools10".into()),
+            project: None,
+            version: None,
+            os: None,
+            arch: None,
+            package_type: None,
+            offline: false,
+            output: PathBuf::from("."),
+            extract: false,
+            print_files: false,
+            verbose: false,
+            trace: false,
+            username: "user".into(),
+            password: "pass".into(),
+        };
+
+        let request = build_release_request(&cli).unwrap();
+        assert_eq!(request.project, "DevelopmentTools10");
+        assert_eq!(request.version, "latest");
     }
 
     #[test]
