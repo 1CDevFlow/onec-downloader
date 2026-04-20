@@ -133,6 +133,7 @@ jobs:
           echo "asset_path=${asset_path}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload portable binary to draft release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "${{ steps.portable.outputs.asset_path }}" --clobber
