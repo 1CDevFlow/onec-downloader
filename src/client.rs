@@ -94,10 +94,7 @@ impl OnecClient {
         self.download_matching_files(&version, &release.filter, destination)
     }
 
-    pub fn matching_release_files(
-        &self,
-        release: &ReleaseDescription,
-    ) -> Result<Vec<ReleaseFile>> {
+    pub fn matching_release_files(&self, release: &ReleaseDescription) -> Result<Vec<ReleaseFile>> {
         self.log(&format!(
             "starting candidate selection: project={}, version={}",
             release.project, release.version
@@ -131,8 +128,7 @@ impl OnecClient {
         self.announce_resolved_version(project, version, &version_info.name);
         self.log(&format!(
             "matched version {}; loading release files from {}",
-            version_info.name,
-            version_info.url
+            version_info.name, version_info.url
         ));
         version_info.files = self.version_files(&version_info.url)?;
         self.log(&format!(
@@ -145,9 +141,7 @@ impl OnecClient {
 
     fn announce_resolved_version(&self, project: &str, requested: &str, resolved: &str) {
         let message = if requested.eq_ignore_ascii_case("latest") || requested != resolved {
-            format!(
-                "selected version {resolved} for {project} (requested {requested})"
-            )
+            format!("selected version {resolved} for {project} (requested {requested})")
         } else {
             format!("selected version {resolved} for {project}")
         };
@@ -236,7 +230,10 @@ impl OnecClient {
                 .collect::<Vec<_>>()
                 .join("; ");
             if available_files.is_empty() {
-                bail!("no files found for filter {:?}; version contains no files", artifact_filter);
+                bail!(
+                    "no files found for filter {:?}; version contains no files",
+                    artifact_filter
+                );
             }
 
             bail!(
@@ -1172,7 +1169,9 @@ mod tests {
     use ureq::http::HeaderValue;
 
     fn is_legacy_linux_platform_version(version: &str) -> bool {
-        let mut parts = version.split('.').filter_map(|part| part.parse::<u32>().ok());
+        let mut parts = version
+            .split('.')
+            .filter_map(|part| part.parse::<u32>().ok());
         matches!(
             (parts.next(), parts.next(), parts.next()),
             (Some(8), Some(3), Some(patch)) if patch < 20
@@ -1336,10 +1335,10 @@ mod tests {
     #[test]
     #[ignore = "live network test; requires ONEC_USERNAME and ONEC_PASSWORD"]
     fn live_platform83_full_filter_returns_single_match_for_sample_versions() {
-        let username = std::env::var("ONEC_USERNAME")
-            .expect("ONEC_USERNAME must be set for live tests");
-        let password = std::env::var("ONEC_PASSWORD")
-            .expect("ONEC_PASSWORD must be set for live tests");
+        let username =
+            std::env::var("ONEC_USERNAME").expect("ONEC_USERNAME must be set for live tests");
+        let password =
+            std::env::var("ONEC_PASSWORD").expect("ONEC_PASSWORD must be set for live tests");
 
         let client = OnecClient::new(username, password)
             .unwrap()

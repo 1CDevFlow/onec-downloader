@@ -98,10 +98,7 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
         match architecture {
             ArchitectureName::X86 if is_x64 => return false,
             ArchitectureName::X64 if is_x86 => return false,
-            ArchitectureName::X64
-                if !is_x64
-                    && artifact_filter.package_type.is_some() =>
-            {
+            ArchitectureName::X64 if !is_x64 && artifact_filter.package_type.is_some() => {
                 return false;
             }
             _ => {}

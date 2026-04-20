@@ -46,7 +46,11 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     extract: bool,
 
-    #[arg(long, default_value_t = false, help = "Print matched release files and exit")]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Print matched release files and exit"
+    )]
     print_files: bool,
 
     #[arg(long, default_value_t = false)]
@@ -380,7 +384,10 @@ mod tests {
 
         let request = build_release_request(&cli).unwrap();
         assert_eq!(request.filter.os_name, Some(OsName::Linux));
-        assert_eq!(request.filter.package_type, Some(DistributiveType::ThinClient));
+        assert_eq!(
+            request.filter.package_type,
+            Some(DistributiveType::ThinClient)
+        );
     }
 
     #[test]
