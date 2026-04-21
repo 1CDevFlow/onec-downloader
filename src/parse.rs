@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 
 use crate::model::{ReleaseFile, Version};
@@ -77,8 +76,67 @@ fn version_from_link(element: &ElementRef<'_>) -> Option<Version> {
 }
 
 fn extract_version(value: &str) -> Option<String> {
-    let regex = Regex::new(r"\b\d+\.\d+(?:\.\d+(?:\.\d+)?)?\b").unwrap();
-    regex.find(value).map(|m| m.as_str().to_owned())
+    for (start, ch) in value.char_indices() {
+        if !ch.is_ascii_digit() || !is_word_boundary(value, start) {
+            continue;
+        }
+
+        if let Some(end) = version_end(value, start) {
+            return Some(value[start..end].to_owned());
+        }
+    }
+
+    None
+}
+
+fn version_end(value: &str, start: usize) -> Option<usize> {
+    let mut position = start;
+    let mut parts = 0;
+    let mut last_valid_end = None;
+
+    loop {
+        let digit_count = value[position..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .count();
+        if digit_count == 0 {
+            break;
+        }
+
+        position += digit_count;
+        parts += 1;
+
+        if parts >= 2 && is_word_boundary(value, position) {
+            last_valid_end = Some(position);
+        }
+
+        if parts == 4 {
+            break;
+        }
+
+        let Some(next) = value[position..].strip_prefix('.') else {
+            break;
+        };
+        let Some(ch) = next.chars().next() else {
+            break;
+        };
+        if !ch.is_ascii_digit() {
+            break;
+        }
+        position += 1;
+    }
+
+    last_valid_end
+}
+
+fn is_word_boundary(value: &str, byte_index: usize) -> bool {
+    let previous = value[..byte_index].chars().next_back();
+    let next = value[byte_index..].chars().next();
+    previous.map(is_word_char).unwrap_or(false) != next.map(is_word_char).unwrap_or(false)
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch == '_' || ch.is_alphanumeric()
 }
 
 #[cfg(test)]

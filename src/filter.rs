@@ -1,65 +1,162 @@
-use regex::Regex;
-
 use crate::model::{ArchitectureName, ArtifactFilter, DistributiveType, OsName, ReleaseFile};
 
-fn x64_pattern() -> Regex {
-    Regex::new(r".*(\(64-bit\)|\(64 бит\)|\b64\s*Bit\b).*").unwrap()
+fn is_x64_name(name: &str) -> bool {
+    name.contains("(64-bit)") || name.contains("(64 бит)") || contains_bit_marker(name, "64")
 }
 
-fn x86_pattern() -> Regex {
-    Regex::new(r".*(\(32-bit\)|\(32 бит\)|\b32\s*Bit\b).*").unwrap()
+fn is_x86_name(name: &str) -> bool {
+    name.contains("(32-bit)") || name.contains("(32 бит)") || contains_bit_marker(name, "32")
 }
 
-fn rpm_pattern() -> Regex {
-    Regex::new(r".+RPM.+(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
+fn contains_bit_marker(name: &str, bits: &str) -> bool {
+    let mut rest = name;
+
+    while let Some(offset) = rest.find(bits) {
+        let absolute = name.len() - rest.len() + offset;
+        let after_bits = absolute + bits.len();
+
+        if is_word_boundary(name, absolute) {
+            let tail = &name[after_bits..];
+            let trimmed = tail.trim_start_matches(char::is_whitespace);
+            if let Some(after_bit) = trimmed.strip_prefix("Bit") {
+                let bit_end = name.len() - after_bit.len();
+                if is_word_boundary(name, bit_end) {
+                    return true;
+                }
+            }
+        }
+
+        rest = &name[after_bits..];
+    }
+
+    false
 }
 
-fn deb_pattern() -> Regex {
-    Regex::new(r".+DEB.+(ОС Linux|для Linux($|\s+(без интернета|оффлайн))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
+fn is_word_boundary(value: &str, byte_index: usize) -> bool {
+    let previous = value[..byte_index].chars().next_back();
+    let next = value[byte_index..].chars().next();
+    previous.map(is_word_char).unwrap_or(false) != next.map(is_word_char).unwrap_or(false)
 }
 
-fn linux_pattern() -> Regex {
-    Regex::new(r".*(ОС Linux|для Linux($|\s+(без интернета|оффлайн)|\s+\d+\s*Bit|\s+\(\d+-bit\))|Linux-систем($|\s+(без интернета|оффлайн))).*").unwrap()
+fn is_word_char(ch: char) -> bool {
+    ch == '_' || ch.is_alphanumeric()
 }
 
-fn windows_pattern() -> Regex {
-    Regex::new(r".*(ОС Windows|для Windows$|для Windows\s\+).*").unwrap()
+fn is_rpm_name(name: &str) -> bool {
+    name.contains("RPM") && is_linux_package_target(name)
 }
 
-fn osx_pattern() -> Regex {
-    Regex::new(r".+(OS X|для macOS)$").unwrap()
+fn is_deb_name(name: &str) -> bool {
+    name.contains("DEB") && is_linux_package_target(name)
 }
 
-fn client_pattern() -> Regex {
-    Regex::new(r"^Клиент.+").unwrap()
+fn is_linux_name(name: &str) -> bool {
+    name.contains("ОС Linux") || has_linux_for_suffix(name) || has_linux_systems_suffix(name)
 }
 
-fn server_pattern() -> Regex {
-    Regex::new(r"^[CС]ервер.+").unwrap()
+fn is_linux_package_target(name: &str) -> bool {
+    name.contains("ОС Linux")
+        || has_linux_for_offline_suffix(name)
+        || has_linux_systems_suffix(name)
 }
 
-fn thin_pattern() -> Regex {
-    Regex::new(r"^Тонкий клиент.+").unwrap()
+fn has_linux_for_suffix(name: &str) -> bool {
+    let Some(tail) = name.split_once("для Linux").map(|(_, tail)| tail) else {
+        return false;
+    };
+
+    tail.is_empty()
+        || is_offline_suffix(tail)
+        || is_bit_suffix(tail)
+        || is_parenthesized_bit_suffix(tail)
 }
 
-fn full_pattern() -> Regex {
-    Regex::new(r"^Технологическая платформа.+").unwrap()
+fn has_linux_for_offline_suffix(name: &str) -> bool {
+    let Some(tail) = name.split_once("для Linux").map(|(_, tail)| tail) else {
+        return false;
+    };
+
+    tail.is_empty() || is_offline_suffix(tail)
 }
 
-fn combined_client_package_pattern() -> Regex {
-    Regex::new(r".+\+\s*Тонкий клиент.+").unwrap()
+fn has_linux_systems_suffix(name: &str) -> bool {
+    let Some(tail) = name.split_once("Linux-систем").map(|(_, tail)| tail) else {
+        return false;
+    };
+
+    tail.is_empty() || is_offline_suffix(tail)
 }
 
-fn offline_pattern() -> Regex {
-    Regex::new(r".+(без интернета|оффлайн).*").unwrap()
+fn is_offline_suffix(tail: &str) -> bool {
+    let tail = tail.trim_start_matches(char::is_whitespace);
+    tail.starts_with("без интернета") || tail.starts_with("оффлайн")
 }
 
-fn client_or_server_pattern() -> Regex {
-    Regex::new(r"^(Клиент|Cервер|Сервер).+").unwrap()
+fn is_bit_suffix(tail: &str) -> bool {
+    let tail = tail.trim_start_matches(char::is_whitespace);
+    let digit_count = tail.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    let tail = &tail[digit_count..];
+    tail.trim_start_matches(char::is_whitespace)
+        .starts_with("Bit")
 }
 
-fn sha_pattern() -> Regex {
-    Regex::new(r".*(Контрольная сумма|sha).*").unwrap()
+fn is_parenthesized_bit_suffix(tail: &str) -> bool {
+    let tail = tail.trim_start_matches(char::is_whitespace);
+    let Some(tail) = tail.strip_prefix('(') else {
+        return false;
+    };
+    let digit_count = tail.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    tail[digit_count..].starts_with("-bit)")
+}
+
+fn is_windows_name(name: &str) -> bool {
+    name.contains("ОС Windows") || name.ends_with("для Windows") || name.contains("для Windows +")
+}
+
+fn is_osx_name(name: &str) -> bool {
+    name.ends_with("OS X") || name.ends_with("для macOS")
+}
+
+fn is_client_name(name: &str) -> bool {
+    name.starts_with("Клиент")
+}
+
+fn is_server_name(name: &str) -> bool {
+    name.starts_with("Cервер") || name.starts_with("Сервер")
+}
+
+fn is_thin_client_name(name: &str) -> bool {
+    name.starts_with("Тонкий клиент")
+}
+
+fn is_full_name(name: &str) -> bool {
+    name.starts_with("Технологическая платформа")
+}
+
+fn is_combined_client_package(name: &str) -> bool {
+    name.split_once('+')
+        .map(|(_, tail)| tail.trim_start().starts_with("Тонкий клиент"))
+        .unwrap_or(false)
+}
+
+fn is_offline_name(name: &str) -> bool {
+    name.contains("без интернета") || name.contains("оффлайн")
+}
+
+fn is_client_or_server_name(name: &str) -> bool {
+    is_client_name(name) || is_server_name(name)
+}
+
+fn is_sha_name(name: &str) -> bool {
+    name.contains("Контрольная сумма") || name.contains("sha")
 }
 
 pub fn filter_files(files: &[ReleaseFile], artifact_filter: &ArtifactFilter) -> Vec<ReleaseFile> {
@@ -71,21 +168,17 @@ pub fn filter_files(files: &[ReleaseFile], artifact_filter: &ArtifactFilter) -> 
 }
 
 fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
-    if sha_pattern().is_match(name) {
+    if is_sha_name(name) {
         return false;
     }
 
     if let Some(os_name) = artifact_filter.os_name {
         let matched = match os_name {
-            OsName::Win => windows_pattern().is_match(name),
-            OsName::Mac => osx_pattern().is_match(name),
-            OsName::Linux => {
-                linux_pattern().is_match(name)
-                    && !deb_pattern().is_match(name)
-                    && !rpm_pattern().is_match(name)
-            }
-            OsName::Deb => deb_pattern().is_match(name),
-            OsName::Rpm => rpm_pattern().is_match(name),
+            OsName::Win => is_windows_name(name),
+            OsName::Mac => is_osx_name(name),
+            OsName::Linux => is_linux_name(name) && !is_deb_name(name) && !is_rpm_name(name),
+            OsName::Deb => is_deb_name(name),
+            OsName::Rpm => is_rpm_name(name),
         };
         if !matched {
             return false;
@@ -93,8 +186,8 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
     }
 
     if let Some(architecture) = artifact_filter.architecture {
-        let is_x64 = x64_pattern().is_match(name);
-        let is_x86 = x86_pattern().is_match(name);
+        let is_x64 = is_x64_name(name);
+        let is_x86 = is_x86_name(name);
         match architecture {
             ArchitectureName::X86 if is_x64 => return false,
             ArchitectureName::X64 if is_x86 => return false,
@@ -107,11 +200,11 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
 
     if let Some(package_type) = artifact_filter.package_type {
         let matched = match package_type {
-            DistributiveType::Full => full_pattern().is_match(name),
-            DistributiveType::ThinClient => thin_pattern().is_match(name),
-            DistributiveType::Server => server_pattern().is_match(name),
-            DistributiveType::Client => client_pattern().is_match(name),
-            DistributiveType::ClientOrServer => client_or_server_pattern().is_match(name),
+            DistributiveType::Full => is_full_name(name),
+            DistributiveType::ThinClient => is_thin_client_name(name),
+            DistributiveType::Server => is_server_name(name),
+            DistributiveType::Client => is_client_name(name),
+            DistributiveType::ClientOrServer => is_client_or_server_name(name),
         };
         if !matched {
             return false;
@@ -119,16 +212,16 @@ fn matches_all(name: &str, artifact_filter: &ArtifactFilter) -> bool {
 
         if package_type == DistributiveType::Full
             && artifact_filter.os_name == Some(OsName::Win)
-            && combined_client_package_pattern().is_match(name)
+            && is_combined_client_package(name)
         {
             return false;
         }
     }
 
     if artifact_filter.offline {
-        offline_pattern().is_match(name)
+        is_offline_name(name)
     } else {
-        !offline_pattern().is_match(name)
+        !is_offline_name(name)
     }
 }
 

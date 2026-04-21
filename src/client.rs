@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use scraper::{Html, Selector};
-use terminal_size::{Width, terminal_size};
 use ureq::http::StatusCode;
 use ureq::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, HeaderMap};
 use ureq::{Agent, Body, ResponseExt, http};
@@ -1027,10 +1026,6 @@ fn red(value: &str) -> String {
 }
 
 fn progress_width() -> usize {
-    if let Some((Width(width), _)) = terminal_size() {
-        return usize::from(width).max(60);
-    }
-
     std::env::var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
