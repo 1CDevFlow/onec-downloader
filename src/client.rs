@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use scraper::{Html, Selector};
 use ureq::http::StatusCode;
-use ureq::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, HeaderMap};
+use ureq::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, HeaderMap};
 use ureq::{Agent, Body, ResponseExt, http};
 use url::Url;
 
@@ -320,10 +320,6 @@ impl OnecClient {
         let (form_url, body) =
             build_login_form_request(&html, &login_page_url, &self.login, &self.password)?;
         self.trace(&format!("login page final url: {login_page_url}"));
-        self.trace(&format!(
-            "login page snippet: {}",
-            truncate_for_log(&html, 400)
-        ));
         self.log(&format!("submitting login form to {form_url}"));
         self.trace(&format!(
             "POST headers: Content-Type=application/x-www-form-urlencoded, Referer={}, Accept=*/*, User-Agent={}",
@@ -344,10 +340,6 @@ impl OnecClient {
         response = self.ensure_ok(response)?;
         if is_login_uri(response.get_uri()) {
             let html = response.body_mut().read_to_string().unwrap_or_default();
-            self.trace(&format!(
-                "login response snippet: {}",
-                truncate_for_log(&html, 800)
-            ));
             let details = extract_login_error(&html).unwrap_or_else(|| {
                 "login page returned without an explicit error message".to_owned()
             });
@@ -365,14 +357,20 @@ impl OnecClient {
         Ok(())
     }
 
-    fn ensure_ok(&self, mut response: Response) -> Result<Response> {
+    fn ensure_ok(&self, response: Response) -> Result<Response> {
         if response.status() == StatusCode::OK {
             return Ok(response);
         }
 
         let status = response.status();
-        let body = response.body_mut().read_to_string().unwrap_or_default();
-        Err(anyhow!("response error: status={status}, body={body}"))
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<unknown>");
+        Err(anyhow!(
+            "response error: status={status}, content-type={content_type}"
+        ))
     }
 
     fn download_file(
@@ -746,15 +744,6 @@ fn redact_secret(value: &str) -> String {
     }
 
     "<redacted>".to_owned()
-}
-
-fn truncate_for_log(value: &str, limit: usize) -> String {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.len() <= limit {
-        return normalized;
-    }
-
-    format!("{}...", &normalized[..limit])
 }
 
 fn should_report_progress(downloaded: u64, last_reported: u64, total: Option<u64>) -> bool {
@@ -1251,6 +1240,29 @@ mod tests {
             redact_form_body(body),
             "username=<redacted>&password=<redacted>&execution=abc"
         );
+    }
+
+    #[test]
+    fn response_errors_do_not_include_body() {
+        let client = OnecClient::new("user", "pass").unwrap();
+        let response = http::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(CONTENT_TYPE, "text/html")
+            .body(
+                Body::builder()
+                    .mime_type("text/html")
+                    .data("<!DOCTYPE html><html>private page</html>"),
+            )
+            .unwrap();
+
+        let message = client.ensure_ok(response).unwrap_err().to_string();
+
+        assert_eq!(
+            message,
+            "response error: status=401 Unauthorized, content-type=text/html"
+        );
+        assert!(!message.contains("<!DOCTYPE html>"));
+        assert!(!message.contains("private page"));
     }
 
     #[test]
